@@ -188,7 +188,7 @@ This readme and the [docs/](docs/) directory are **versioned** to match the prog
 1. Run the container with
 
     ```sh
-    docker run -d -p 8000:8000/tcp -v "$(pwd)"/data:/updater/data ghcr.io/qdm12/ddns-updater
+    docker run -d -p 12345:12345/tcp -v "$(pwd)"/data:/updater/data ghcr.io/qdm12/ddns-updater
     ```
 
 1. The following is **optional**.
@@ -304,7 +304,7 @@ Note that:
 | `UPDATE_COOLDOWN_PERIOD` | `5m` | Duration to cooldown between updates for each record. This is useful to avoid being rate limited or banned. |
 | `HTTP_TIMEOUT` | `10s` | Timeout for all HTTP requests |
 | `SERVER_ENABLED` | `yes` | Enable the web server and web UI |
-| `LISTENING_ADDRESS` | `:8000` | Internal TCP listening port for the web UI |
+| `LISTENING_ADDRESS` | `:12345` | Internal TCP listening port for the web UI, see [the note below](#why-is-the-web-ui-listening-on-port-12345) |
 | `ROOT_URL` | `/` | URL path to append to all paths to the webUI (i.e. `/ddns` for accessing `https://example.com/ddns` through a proxy) |
 | `HEALTH_SERVER_ADDRESS` | `127.0.0.1:9999` | Health server listening address |
 | `HEALTH_HEALTHCHECKSIO_BASE_URL` | `https://hc-ping.com` | Base URL for the [healthchecks.io](https://healthchecks.io) server |
@@ -314,12 +314,38 @@ Note that:
 | `BACKUP_PERIOD` | `0` | Set to a period (i.e. `72h15m`) to enable zip backups of data/config.json and data/updates.json in a zip file |
 | `BACKUP_DIRECTORY` | `/updater/data` | Directory to write backup zip files to if `BACKUP_PERIOD` is not `0`. |
 | `RESOLVER_ADDRESS` | Your network DNS | A plaintext DNS address to use to resolve your domain names defined in your settings only. For example it can be `1.1.1.1:53`. This is useful for split dns, see [#389](https://github.com/qdm12/ddns-updater/issues/389) |
+| `RESOLVER_DOH_URL` | | A [DNS over HTTPS](https://datatracker.ietf.org/doc/html/rfc8484) server URL to resolve the provider and domain names with, for example `https://cloudflare-dns.com/dns-query`. It takes precedence over `RESOLVER_ADDRESS` and the system DNS. This is useful when the local DNS servers do not resolve some names, or when plain DNS on port 53 is blocked on the network |
 | `LOG_LEVEL` | `info` | Level of logging, `debug`, `info`, `warning` or `error` |
 | `LOG_CALLER` | `hidden` | Show caller per log line, `hidden` or `short` |
 | `SHOUTRRR_ADDRESSES` | | (optional) Comma separated list of [Shoutrrr addresses](https://containrrr.dev/shoutrrr/v0.8/services/overview/) (notification services) |
 | `SHOUTRRR_DEFAULT_TITLE` | `DDNS Updater` | Default title for Shoutrrr notifications |
 | `TZ` | | Timezone to have accurate times, i.e. `America/Montreal` |
 | `UMASK` | System current umask | Umask to set for the program in octal, i.e. `0022` |
+
+#### Why is the web UI listening on port 12345?
+
+The default web UI listening port was changed from `:8000` to `:12345`.
+
+Port 8000 is one of the most commonly used ports on the internet: it is the
+default for a large number of web frameworks, development servers and
+container images (Jupyter, many Node and Python applications, several
+official Docker images, and so on). Running ddns-updater next to any of them
+means the web UI fails to bind with `address already in use`, and the user has
+to discover the `LISTENING_ADDRESS` variable (or the equivalent flag) to move
+it out of the way.
+
+`:12345` is a registered port that is not used by any well known service, and
+it is easy to remember and to type. Using it as the default means the web UI
+works out of the box in the vast majority of setups, instead of requiring
+every user who has something else on 8000 to change a setting.
+
+This only changes the default. The port can still be set to anything with
+`LISTENING_ADDRESS` or the equivalent flag, and `8000` remains perfectly
+valid:
+
+```sh
+docker run -d -p 8000:8000/tcp -v "$(pwd)"/data:/updater/data ghcr.io/qdm12/ddns-updater
+```
 
 #### Public IP
 
@@ -372,7 +398,7 @@ If you have a host firewall in place, this container needs the following ports:
 
 - TCP 443 outbound for outbound HTTPS
 - UDP 53 outbound for outbound DNS resolution
-- TCP 8000 inbound (or other) for the WebUI
+- TCP 12345 inbound (or other) for the WebUI
 
 ## Architecture
 

@@ -18,7 +18,7 @@ type Server struct {
 
 func (s *Server) setDefaults() {
 	s.Enabled = gosettings.DefaultPointer(s.Enabled, true)
-	s.ListeningAddress = gosettings.DefaultComparable(s.ListeningAddress, ":8000")
+	s.ListeningAddress = gosettings.DefaultComparable(s.ListeningAddress, ":12345")
 	s.RootURL = gosettings.DefaultComparable(s.RootURL, "/")
 }
 

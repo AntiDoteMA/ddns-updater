@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,10 +23,10 @@ import (
 	"github.com/qdm12/ddns-updater/internal/noop"
 	jsonparams "github.com/qdm12/ddns-updater/internal/params"
 	persistence "github.com/qdm12/ddns-updater/internal/persistence/json"
-	"github.com/qdm12/ddns-updater/internal/provider"
-	recordslib "github.com/qdm12/ddns-updater/internal/records"
+	"github.com/qdm12/ddns-updater/internal/reload"
 	"github.com/qdm12/ddns-updater/internal/resolver"
 	"github.com/qdm12/ddns-updater/internal/server"
+	"github.com/qdm12/ddns-updater/internal/settings"
 	"github.com/qdm12/ddns-updater/internal/shoutrrr"
 	"github.com/qdm12/ddns-updater/internal/system"
 	"github.com/qdm12/ddns-updater/internal/update"
@@ -164,7 +166,21 @@ func _main(ctx context.Context, reader *reader.Reader, args []string, logger log
 
 	logProvidersCount(len(providers), logger)
 
-	client := &http.Client{Timeout: config.Client.Timeout}
+	resolverSettings := resolver.Settings{
+		Address: config.Resolver.Address,
+		Timeout: config.Resolver.Timeout,
+		DOHURL:  config.Resolver.DOHURL,
+	}
+	hostResolver, err := resolver.New(resolverSettings)
+	if err != nil {
+		return fmt.Errorf("creating resolver: %w", err)
+	}
+
+	client, err := newHTTPClient(config.Client.Timeout, hostResolver,
+		*config.Resolver.DOHURL != "")
+	if err != nil {
+		return fmt.Errorf("creating HTTP client: %w", err)
+	}
 	defer client.CloseIdleConnections()
 
 	err = health.CheckHTTP(ctx, client)
@@ -172,7 +188,7 @@ func _main(ctx context.Context, reader *reader.Reader, args []string, logger log
 		logger.Warn(err.Error())
 	}
 
-	records, err := readRecords(providers, persistentDB, logger, shoutrrrClient)
+	records, err := reload.ReadRecords(providers, persistentDB, logger, shoutrrrClient)
 	if err != nil {
 		return fmt.Errorf("reading records: %w", err)
 	}
@@ -194,30 +210,40 @@ func _main(ctx context.Context, reader *reader.Reader, args []string, logger log
 		return err
 	}
 
-	resolverSettings := resolver.Settings{
-		Address: config.Resolver.Address,
-		Timeout: config.Resolver.Timeout,
-	}
-	resolver, err := resolver.New(resolverSettings)
-	if err != nil {
-		return fmt.Errorf("creating resolver: %w", err)
-	}
-
 	hioClient := healthchecksio.New(client, config.Health.HealthchecksioBaseURL,
 		*config.Health.HealthchecksioUUID)
 
 	debugEnabled := config.Logger.Level == log.LevelDebug.String()
 	updater := update.NewUpdater(db, client, shoutrrrClient, logger, timeNow, debugEnabled)
 	updaterService := update.NewService(db, updater, ipGetter, config.Update.Period,
-		config.Update.Cooldown, logger, resolver, timeNow, hioClient)
+		config.Update.Cooldown, logger, hostResolver, timeNow, hioClient)
 
-	healthServer, err := createHealthServer(db, resolver, logger,
+	// The settings file allows overriding the period and cooldown set
+	// through environment variables, and is re-read when reloading the
+	// configuration from the web UI.
+	err = applySettingsFile(*config.Paths.SettingsFile, updaterService, logger)
+	if err != nil {
+		return err
+	}
+
+	reloadService := reload.New(reload.Settings{
+		ConfigFilePath:   *config.Paths.Config,
+		SettingsFilePath: *config.Paths.SettingsFile,
+		JSONReader:       jsonReader,
+		PersistentDB:     persistentDB,
+		Database:         db,
+		Updater:          updaterService,
+		Logger:           logger,
+		ShoutrrrClient:   shoutrrrClient,
+	})
+
+	healthServer, err := createHealthServer(db, resolver.NewIPResolver(hostResolver), logger,
 		*config.Health.ServerAddress, timeNow)
 	if err != nil {
 		return fmt.Errorf("creating health server: %w", err)
 	}
 
-	server, err := createServer(ctx, config.Server, logger, db, updaterService)
+	server, err := createServer(ctx, config.Server, logger, db, updaterService, reloadService)
 	if err != nil {
 		return fmt.Errorf("creating server: %w", err)
 	}
@@ -225,7 +251,7 @@ func _main(ctx context.Context, reader *reader.Reader, args []string, logger log
 	var backupService goservices.Service
 	backupLogger := logger.New(log.SetComponent("backup"))
 	backupService = backup.New(*config.Backup.Period, *config.Paths.DataDir,
-		*config.Backup.Directory, backupLogger)
+		*config.Backup.Directory, *config.Paths.Config, backupLogger)
 	backupService, err = goservices.NewRestarter(goservices.RestarterSettings{Service: backupService})
 	if err != nil {
 		return fmt.Errorf("creating backup restarter: %w", err)
@@ -322,26 +348,6 @@ func logProvidersCount(providersCount int, logger log.LeveledLogger) {
 	}
 }
 
-func readRecords(providers []provider.Provider, persistentDB *persistence.Database,
-	logger log.LoggerInterface, shoutrrrClient *shoutrrr.Client) (
-	records []recordslib.Record, err error,
-) {
-	records = make([]recordslib.Record, len(providers))
-	for i, provider := range providers {
-		logger.Info("Reading history from database: domain " +
-			provider.Domain() + " owner " + provider.Owner() +
-			" " + provider.IPVersion().String())
-		events, err := persistentDB.GetEvents(provider.Domain(),
-			provider.Owner(), provider.IPVersion())
-		if err != nil {
-			shoutrrrClient.Notify(err.Error())
-			return nil, err
-		}
-		records[i] = recordslib.New(provider, events)
-	}
-	return records, nil
-}
-
 func exitHealthchecksio(hioClient *healthchecksio.Client,
 	logger log.LoggerInterface, state healthchecksio.State,
 ) {
@@ -351,6 +357,99 @@ func exitHealthchecksio(hioClient *healthchecksio.Client,
 	err := hioClient.Ping(ctx, state)
 	if err != nil {
 		logger.Error(err.Error())
+	}
+}
+
+// applySettingsFile applies the period and cooldown found in the settings
+// file to the updater service. The settings file takes precedence over the
+// environment variables, and can be re-read at runtime.
+func applySettingsFile(settingsFilePath string, updaterService *update.Service,
+	logger log.LoggerInterface,
+) (err error) {
+	settingsFile, err := settings.ReadFile(settingsFilePath)
+	if err != nil {
+		return fmt.Errorf("reading settings file: %w", err)
+	}
+
+	period, periodSet, err := settingsFile.Duration(settings.PeriodKey)
+	if err != nil {
+		return fmt.Errorf("reading period setting: %w", err)
+	}
+	if periodSet {
+		updaterService.SetPeriod(period)
+		logger.Info("Period set to " + period.String() + " from " + settingsFilePath)
+	}
+
+	cooldown, cooldownSet, err := settingsFile.Duration(settings.CooldownKey)
+	if err != nil {
+		return fmt.Errorf("reading cooldown setting: %w", err)
+	}
+	if cooldownSet {
+		updaterService.SetCooldown(cooldown)
+		logger.Info("Cooldown set to " + cooldown.String() + " from " + settingsFilePath)
+	}
+
+	return nil
+}
+
+// newHTTPClient creates the HTTP client used to contact the providers.
+// When a DNS over HTTPS resolver is used, the host names are resolved
+// through it, since the local DNS servers may not resolve them, for
+// example when they filter dynamic DNS domains.
+func newHTTPClient(timeout time.Duration, lookupIPer resolver.LookupIPer,
+	useDoH bool,
+) (client *http.Client, err error) {
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("default HTTP transport is not a *http.Transport")
+	}
+
+	transport := defaultTransport.Clone()
+	if useDoH {
+		transport.DialContext = dohDialContext(lookupIPer)
+	}
+
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}, nil
+}
+
+func dohDialContext(lookupIPer resolver.LookupIPer) (
+	dialContext func(ctx context.Context, network, addr string) (conn net.Conn, err error),
+) {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+
+	return func(ctx context.Context, network, addr string) (conn net.Conn, err error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("splitting host and port from %s: %w", addr, err)
+		}
+
+		lookupNetwork := "ip"
+		switch network {
+		case "tcp4":
+			lookupNetwork = "ip4"
+		case "tcp6":
+			lookupNetwork = "ip6"
+		}
+
+		addresses, err := lookupIPer.LookupNetIP(ctx, lookupNetwork, host)
+		if err != nil {
+			return nil, fmt.Errorf("resolving %s: %w", host, err)
+		}
+
+		errs := make([]error, 0, len(addresses))
+		for _, address := range addresses {
+			conn, err := dialer.DialContext(ctx, network,
+				net.JoinHostPort(address.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			errs = append(errs, err)
+		}
+
+		return nil, fmt.Errorf("dialing %s: %w", addr, errors.Join(errs...))
 	}
 }
 
@@ -370,7 +469,7 @@ func createHealthServer(db health.AllSelecter, resolver health.LookupIPer,
 //nolint:ireturn
 func createServer(ctx context.Context, config config.Server,
 	logger log.LoggerInterface, db server.Database,
-	updaterService server.UpdateForcer) (
+	updaterService server.UpdateForcer, reloader server.ConfigReloader) (
 	service goservices.Service, err error,
 ) {
 	if !*config.Enabled {
@@ -378,5 +477,5 @@ func createServer(ctx context.Context, config config.Server,
 	}
 	serverLogger := logger.New(log.SetComponent("http server"))
 	return server.New(ctx, config.ListeningAddress, config.RootURL,
-		db, serverLogger, updaterService)
+		db, serverLogger, updaterService, reloader)
 }

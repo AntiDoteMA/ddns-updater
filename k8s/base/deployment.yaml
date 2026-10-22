@@ -20,4 +20,4 @@ spec:
             - secretRef:
                 name: ddns-updater-config
           ports:
-            - containerPort: 8000
+            - containerPort: 12345

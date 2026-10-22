@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/qdm12/gosettings"
@@ -14,18 +15,25 @@ import (
 type Resolver struct {
 	Address *string
 	Timeout time.Duration
+	// DOHURL is the DNS over HTTPS server URL to use, for example
+	// https://cloudflare-dns.com/dns-query. It is useful when the local
+	// DNS servers do not resolve the names needed, or when plain DNS on
+	// port 53 is blocked on the network. It is empty when not used.
+	DOHURL *string
 }
 
 func (r *Resolver) setDefaults() {
 	r.Address = gosettings.DefaultPointer(r.Address, "")
 	const defaultTimeout = 5 * time.Second
 	r.Timeout = gosettings.DefaultComparable(r.Timeout, defaultTimeout)
+	r.DOHURL = gosettings.DefaultPointer(r.DOHURL, "")
 }
 
 var (
 	ErrAddressHostEmpty = errors.New("address host is empty")
 	ErrAddressPortEmpty = errors.New("address port is empty")
 	ErrTimeoutTooLow    = errors.New("timeout is too low")
+	ErrDOHURLNotHTTPS   = errors.New("DNS over HTTPS URL must start with https://")
 )
 
 func (r Resolver) Validate() (err error) {
@@ -49,6 +57,10 @@ func (r Resolver) Validate() (err error) {
 			ErrTimeoutTooLow, r.Timeout, minTimeout)
 	}
 
+	if *r.DOHURL != "" && !strings.HasPrefix(*r.DOHURL, "https://") {
+		return fmt.Errorf("%w: %s", ErrDOHURLNotHTTPS, *r.DOHURL)
+	}
+
 	return nil
 }
 
@@ -57,12 +69,17 @@ func (r Resolver) String() string {
 }
 
 func (r Resolver) ToLinesNode() *gotree.Node {
-	if *r.Address == "" {
+	if *r.Address == "" && *r.DOHURL == "" {
 		return gotree.New("Resolver: use Go default resolver")
 	}
 
 	node := gotree.New("Resolver")
-	node.Appendf("Address: %s", *r.Address)
+	if *r.Address != "" {
+		node.Appendf("Address: %s", *r.Address)
+	}
+	if *r.DOHURL != "" {
+		node.Appendf("DNS over HTTPS URL: %s", *r.DOHURL)
+	}
 	node.Appendf("Timeout: %s", r.Timeout)
 	return node
 }
@@ -75,6 +92,7 @@ func (r *Resolver) read(reader *reader.Reader) (err error) {
 			*r.Address += ":53"
 		}
 	}
+	r.DOHURL = reader.Get("RESOLVER_DOH_URL")
 	r.Timeout, err = reader.Duration("RESOLVER_TIMEOUT")
 	return err
 }
