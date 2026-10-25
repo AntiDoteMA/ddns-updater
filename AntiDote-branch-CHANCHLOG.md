@@ -1,7 +1,10 @@
-# Changes to the upstream repository
+# AntiDote branch changelog
 
-This file documents every change made to [qdm12/ddns-updater](https://github.com/qdm12/ddns-updater)
-in this fork, so it is clear what is local and what is upstream.
+This is the changelog of the fork of [qdm12/ddns-updater](https://github.com/qdm12/ddns-updater)
+published at [AntiDoteMA/ddns-updater](https://github.com/AntiDoteMA/ddns-updater).
+It documents every change made to the upstream program here, so it is clear
+what is local and what is upstream. The main `README.md` links to this file and
+otherwise keeps the upstream documentation.
 
 Everything is additive except for the two changed defaults listed below. The
 upstream behaviour can be restored by setting the corresponding environment
@@ -19,6 +22,7 @@ variables.
 | Change the period at runtime | not possible (restart required) | **`GET /reload?period=30s`** |
 | DNS resolution | system resolver only | **DNS over HTTPS** (`RESOLVER_DOH_URL`) |
 | Web UI buttons | none (the `/update` endpoint existed but had no button) | **Update now**, **Reload config**, period input, **Live refresh toggle** |
+| Adding, editing and deleting records | edit the configuration file and restart | **Manage records** pages in the web UI |
 | Windows installation | Docker image or manual | **Inno Setup installer** (`windows/`) |
 
 ### Why the web UI port changed to 12345
@@ -36,12 +40,23 @@ works out of the box in the vast majority of setups.
 
 This only changes the default. The port can still be set to anything with
 `LISTENING_ADDRESS` or the equivalent flag, and `8000` remains perfectly
-valid. The rationale is also documented in the upstream `README.md`, in the
-"Why is the web UI listening on port 12345?" section.
+valid:
+
+```sh
+docker run -d -p 8000:8000/tcp -v "$(pwd)"/data:/updater/data ghcr.io/qdm12/ddns-updater
+```
 
 ---
 
 ## 2. New features
+
+The screenshots in this section are taken from a running instance and show the
+interface changes only, not the updating itself.
+
+![Web UI toolbar with Update now, Reload config, the period input and the Live toggle](readme/webui-toolbar.png)
+
+*The toolbar: **Update now**, **Reload config**, the period input with
+**Set period**, the **Live** toggle and the **Manage records** link.*
 
 ### 2.1 Reload the configuration from the web UI
 
@@ -120,6 +135,56 @@ reload. It is **off by default**.
 The **Update now** button also refreshes the table once it completes, so the
 new status is visible without waiting for the next tick.
 
+### 2.6 Add, edit and delete records from the web UI
+
+Upstream only reads the configuration file: adding a record means editing
+*config.json* by hand and restarting the program. The web UI gained a
+**Manage records** page which lists the configured entries with **Edit** and
+**Delete** actions, and an **Add a record** form. This works for all supported
+providers, not a hardcoded subset.
+
+![Records page listing the configured entries with Edit and Delete actions](readme/webui-records.png)
+
+*The **Manage records** page: one row per configured entry, with **Edit** and
+**Delete**.*
+
+How it works:
+
+1. **Add a record** opens a form. Picking a provider reloads the page with the
+   settings that provider accepts, along with a link to its documentation.
+1. The entry is validated with `params.ValidateEntry`, the same code used when
+   reading *config.json*, so the form cannot produce an entry the program would
+   refuse to start with.
+1. The configuration file is written atomically (temporary file, then rename),
+   keeping the file permissions and any unknown top-level keys, and the new
+   records are applied in memory without restarting the program. If the rebuild
+   fails, the previous file is restored and the error is shown in the page.
+
+![Add a record form for DuckDNS with provider specific and common settings](readme/webui-record-form.png)
+
+*The **Add a record** form, here for DuckDNS: the provider block is generated
+from the provider source, followed by the settings common to every provider.*
+
+A few things to know:
+
+- The configuration file is rewritten with four space indentation and keys
+  sorted alphabetically, so comments and hand-made formatting are not
+  preserved. Unknown top-level keys in the file are kept as they are.
+- The web interface has **no authentication**: anyone who can reach
+  `LISTENING_ADDRESS` can read and change your records, including your provider
+  credentials. Keep it on localhost or behind an authenticating reverse proxy,
+  as already recommended for the whole web interface.
+- Editing is disabled, with a message shown in the page, when the `CONFIG`
+  environment variable is set. That variable takes precedence over the
+  configuration file, so a change written to the file would be overwritten on
+  the next reload. Unset `CONFIG` and restart the program to edit from the web
+  interface.
+- State-changing requests must be same-origin and form-encoded, so a page on
+  another site cannot alter the configuration. This is not a substitute for
+  authentication, only protection against cross-site requests.
+- The provider forms are generated from the provider source code. If you add or
+  change a provider, regenerate them with `go generate ./internal/provider/schema`.
+
 ---
 
 ## 3. New environment variables
@@ -137,8 +202,19 @@ new status is visible without waiting for the next tick.
 | --- | --- |
 | `GET /reload` | Re-reads the records configuration and the settings file |
 | `GET /reload?period=30s` | Sets the period, persists it and reloads |
+| `GET /entries` | Lists the configured records with edit and delete links |
+| `GET /entries/new?provider=cloudflare` | Add form for a provider |
+| `GET /entries/{index}/edit` | Edit form for the record at that position |
+| `POST /entries` | Creates a record |
+| `POST /entries/{index}` | Updates the record at that position |
+| `POST /entries/{index}/delete` | Deletes the record at that position |
 
-Both are unauthenticated, like the rest of the web UI. Keep the listening
+`index` is the position of the entry in the `settings` array of the
+configuration file, which is what the page shows. The records are re-read on
+every request, so the page reflects manual edits to the file as well.
+
+All of them are unauthenticated, like the rest of the web UI, and the entry
+changes additionally require a same-origin form submission. Keep the listening
 address on the loopback interface unless the network is trusted.
 
 ---
@@ -155,11 +231,28 @@ address on the loopback interface unless the network is trusted.
 | `internal/server/reload.go` | 51 | `/reload` handler |
 | `internal/server/reload_test.go` | 102 | Tests for the handler |
 | `internal/update/service_test.go` | 49 | Tests for `SetPeriod` and `SetCooldown` |
+| `internal/configfile/configfile.go` | 225 | Atomic read/modify/write of the configuration file |
+| `internal/configfile/configfile_test.go` | 244 | Tests, including permissions and unknown top-level keys |
+| `internal/provider/schema/schema.go` | 263 | Provider field metadata: labels, help, secret flags |
+| `internal/provider/schema/fields_gen.go` | 569 | Generated field tables, generated from the provider source |
+| `internal/provider/schema/schema_test.go` | 152 | Tests: every provider covered, every documentation path exists |
+| `internal/provider/schema/gen/main.go` | 354 | AST generator behind `go:generate` |
+| `internal/reload/entries.go` | 233 | Entry create, update and delete on the configuration file |
+| `internal/reload/entries_test.go` | 225 | Tests for the entry operations and the rollback |
+| `internal/server/entries.go` | 319 | List, form and mutation handlers |
+| `internal/server/entries_test.go` | 731 | Route, validation and guard tests |
+| `internal/server/index_test.go` | 70 | Regression test: the index table renders record markup |
+| `internal/server/entry_form.go` | 202 | Form values to JSON entry conversion |
+| `internal/server/ui/entries.html` | 72 | Records list page |
+| `internal/server/ui/entry_form.html` | 142 | Add and edit form page |
 | `windows/ddns-updater.iss` | | Inno Setup script |
 | `windows/install-scheduled-task.ps1` | | Registers and starts the scheduled task |
 | `windows/uninstall-scheduled-task.ps1` | | Stops and removes the scheduled task |
 | `windows/run-ddns-updater.cmd` | | Launcher holding the environment variables |
 | `windows/run-ddns-updater.vbs` | | Hidden launcher used by the scheduled task |
+| `readme/webui-toolbar.png` | | Screenshot: toolbar with the new buttons and the **Manage records** link |
+| `readme/webui-records.png` | | Screenshot: records list with **Edit** and **Delete** |
+| `readme/webui-record-form.png` | | Screenshot: **Add a record** form for DuckDNS |
 
 ---
 
@@ -167,7 +260,9 @@ address on the loopback interface unless the network is trusted.
 
 | File | Change |
 | --- | --- |
-| `cmd/ddns-updater/main.go` | Wiring: the HTTP client resolves through DNS over HTTPS, the reload service is created and passed to the server, the settings file is applied at startup, `readRecords` moved to `internal/reload` |
+| `internal/reload/service.go` | Split into `Reload` (locking) and `reloadLocked` (no locking) so the record operations can reuse it |
+| `internal/params/json.go` | Exported `ParseSettings` and `ValidateEntry`, new `ErrInvalidEntry` |
+| `cmd/ddns-updater/main.go` | Wiring: the HTTP client resolves through DNS over HTTPS, the reload service is created and passed to the server as reloader and entry manager, the settings file is applied at startup, `readRecords` moved to `internal/reload` |
 | `internal/config/update.go` | Default period `5m` → `1m` |
 | `internal/config/server.go` | Default listening address `:8000` → `:12345` |
 | `internal/config/resolver.go` | New `RESOLVER_DOH_URL` setting |
@@ -176,16 +271,17 @@ address on the loopback interface unless the network is trusted.
 | `internal/data/memory.go` | New `SetAll()` to replace the records atomically |
 | `internal/resolver/resolver.go` | Returns a `LookupIPer` interface, uses DNS over HTTPS when configured, adds an `IPResolver` adapter for the health package |
 | `internal/resolver/settings.go` | New `DOHURL` setting |
-| `internal/server/handler.go` | `reloader` field and `/reload` route |
-| `internal/server/interfaces.go` | New `ConfigReloader` interface |
-| `internal/server/server.go` | `New()` takes the reloader |
-| `internal/server/ui/index.html` | Toolbar with the new buttons and the period input |
-| `internal/server/ui/static/styles.css` | Styling for the toolbar and the status message |
+| `internal/server/handler.go` | Templates parsed into one `html/template` set instead of `text/template`, `reloader` and `entryManager` fields, `/reload` and `/entries` routes |
+| `internal/server/interfaces.go` | New `ConfigReloader` and `EntryManager` interfaces |
+| `internal/server/server.go` | `New()` takes the reloader and the entry manager |
+| `internal/server/index.go` | Renders through the shared template set |
+| `internal/server/ui/index.html` | Toolbar with the new buttons and the period input, **Manage records** link |
+| `internal/server/ui/static/styles.css` | Styling for the toolbar, the status message and the record pages |
 | `internal/update/service.go` | `SetPeriod` and `SetCooldown`, ticker reset, concurrent-safe access |
 | `internal/backup/service.go` | The backup now archives the **configured** configuration file instead of hardcoding `<datadir>/config.json` |
 | `Dockerfile`, `docker-compose.yml`, `k8s/base/*` | Port updated to 12345 |
-| `README.md` | Documented `RESOLVER_DOH_URL` |
-| `.gitignore` | Excludes the Windows build artefacts and the local configuration |
+| `README.md` | Documented `RESOLVER_DOH_URL`, added the link to this changelog. Fork-specific sections live here instead of in the readme |
+| `.gitignore` | Excludes the local `data` directory and the work-board state |
 
 ---
 
@@ -202,6 +298,11 @@ address on the loopback interface unless the network is trusted.
 - **Relative paths resolve against the working directory**, not against the
   executable location. The launcher sets the working directory explicitly.
 - **The web UI has no authentication.** Keep it on `127.0.0.1`.
+- **The index table renders markup built in Go.** Providers and the record code
+  return HTML in `models.HTMLRow` (domain and provider links, status spans), and
+  the page is parsed with `html/template`, so `internal/server/index.go` converts
+  the fields to `template.HTML` before rendering. Assigning those strings
+  directly makes the table show the tags as text.
 - A name which has no address of the requested type returns the error
   `no such host`, matching the Go resolver, so that the updater treats a
   missing AAAA record as "no IPv6 address" rather than retrying.
@@ -258,7 +359,7 @@ task stores the absolute path of the launcher at registration time.
 
 ```powershell
 go build ./...
-go test ./internal/doh/... ./internal/settings/... ./internal/server/... ./internal/update/... ./internal/config/...
+go test ./internal/configfile/... ./internal/provider/schema/... ./internal/reload/... ./internal/server/... ./internal/doh/... ./internal/settings/... ./internal/update/... ./internal/config/...
 ```
 
 > `go test ./...` also runs the provider tests, which call the real provider
@@ -333,8 +434,10 @@ registers the scheduled task and starts it. Uninstalling removes the task and
 the application but **keeps `data\config.json`**, so the credentials survive a
 reinstall. The rest of the `data` directory is removed on uninstall.
 
-> The `windows/output/` directory is git-ignored, so the setup program is not
-> part of the repository. Everyone builds their own from the `.iss` script.
+> The built setup program is committed as `windows/output/ddns-updater-setup.exe`,
+> so it can be distributed directly. It is also reproducible from the `.iss`
+> script as shown above; the file name stays fixed while `AppVersion` carries the
+> version.
 
 ---
 
@@ -344,4 +447,7 @@ reinstall. The rest of the `data` directory is removed on uninstall.
   setting `PERIOD=5m` and `LISTENING_ADDRESS=:8000`.
 - The new environment variables are optional and default to a no-op.
 - The new HTTP endpoints are additive.
+- `config.json` stays the source of truth: a file written by another tool, or
+  edited by hand, is read exactly as upstream reads it. The record pages only
+  write the same file the program already reads.
 - The provider implementations are untouched.

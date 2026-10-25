@@ -34,7 +34,9 @@ DisableProgramGroupPage=yes
 DisableDirPage=no
 PrivilegesRequired=admin
 OutputDir=output
-OutputBaseFilename=ddns-updater-setup-{#AppVersion}
+; The setup program keeps a fixed file name, as documented in AntiDote-branch-CHANCHLOG.md
+; and as shipped in the repository; the version is in the installer metadata.
+OutputBaseFilename=ddns-updater-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

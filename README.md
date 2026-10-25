@@ -27,6 +27,13 @@ Program to keep DNS A and/or AAAA records updated for multiple DNS providers
 [![MIT](https://img.shields.io/github/license/qdm12/ddns-updater)](LICENSE)
 ![Visitors count](https://visitor-badge.laobi.icu/badge?page_id=ddns-updater.readme)
 
+> **This is a fork of [qdm12/ddns-updater](https://github.com/qdm12/ddns-updater).**
+> Everything that differs from upstream — new features, changed defaults, new
+> files — is documented in
+> [AntiDote-branch-CHANCHLOG.md](AntiDote-branch-CHANCHLOG.md). Read it first if
+> you are coming from the upstream program; the rest of this readme is the
+> upstream documentation.
+
 ## Versioned documentation
 
 This readme and the [docs/](docs/) directory are **versioned** to match the program version:
@@ -296,7 +303,7 @@ Note that:
 | Environment variable | Default | Description |
 | --- | --- | --- |
 | `CONFIG` | | One line JSON object containing the entire config (takes precedence over config.json file) if specified |
-| `PERIOD` | `5m` | Default period of IP address check, following [this format](https://golang.org/pkg/time/#ParseDuration) |
+| `PERIOD` | `1m` | Default period of IP address check, following [this format](https://golang.org/pkg/time/#ParseDuration). This fork defaults to `1m`, upstream to `5m` |
 | `PUBLICIP_FETCHERS` | `all` | Comma separated fetcher types to obtain the public IP address from `http` and `dns` |
 | `PUBLICIP_HTTP_PROVIDERS` | `all` | Comma separated providers to obtain the public IP address (ipv4 or ipv6). See the [Public IP section](#public-ip) |
 | `PUBLICIPV4_HTTP_PROVIDERS` | `all` | Comma separated providers to obtain the public IPv4 address only. See the [Public IP section](#public-ip) |
@@ -306,7 +313,7 @@ Note that:
 | `UPDATE_COOLDOWN_PERIOD` | `5m` | Duration to cooldown between updates for each record. This is useful to avoid being rate limited or banned. |
 | `HTTP_TIMEOUT` | `10s` | Timeout for all HTTP requests |
 | `SERVER_ENABLED` | `yes` | Enable the web server and web UI |
-| `LISTENING_ADDRESS` | `:12345` | Internal TCP listening port for the web UI, see [the note below](#why-is-the-web-ui-listening-on-port-12345) |
+| `LISTENING_ADDRESS` | `:12345` | Internal TCP listening port for the web UI. This fork uses 12345 as the default, see [the changelog](AntiDote-branch-CHANCHLOG.md#why-the-web-ui-port-changed-to-12345) |
 | `ROOT_URL` | `/` | URL path to append to all paths to the webUI (i.e. `/ddns` for accessing `https://example.com/ddns` through a proxy) |
 | `HEALTH_SERVER_ADDRESS` | `127.0.0.1:9999` | Health server listening address |
 | `HEALTH_HEALTHCHECKSIO_BASE_URL` | `https://hc-ping.com` | Base URL for the [healthchecks.io](https://healthchecks.io) server |
@@ -323,31 +330,6 @@ Note that:
 | `SHOUTRRR_DEFAULT_TITLE` | `DDNS Updater` | Default title for Shoutrrr notifications |
 | `TZ` | | Timezone to have accurate times, i.e. `America/Montreal` |
 | `UMASK` | System current umask | Umask to set for the program in octal, i.e. `0022` |
-
-#### Why is the web UI listening on port 12345?
-
-The default web UI listening port was changed from `:8000` to `:12345`.
-
-Port 8000 is one of the most commonly used ports on the internet: it is the
-default for a large number of web frameworks, development servers and
-container images (Jupyter, many Node and Python applications, several
-official Docker images, and so on). Running ddns-updater next to any of them
-means the web UI fails to bind with `address already in use`, and the user has
-to discover the `LISTENING_ADDRESS` variable (or the equivalent flag) to move
-it out of the way.
-
-`:12345` is a registered port that is not used by any well known service, and
-it is easy to remember and to type. Using it as the default means the web UI
-works out of the box in the vast majority of setups, instead of requiring
-every user who has something else on 8000 to change a setting.
-
-This only changes the default. The port can still be set to anything with
-`LISTENING_ADDRESS` or the equivalent flag, and `8000` remains perfectly
-valid:
-
-```sh
-docker run -d -p 8000:8000/tcp -v "$(pwd)"/data:/updater/data ghcr.io/qdm12/ddns-updater
-```
 
 #### Public IP
 
