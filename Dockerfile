@@ -64,7 +64,7 @@ RUN GOARCH="$(xcputranslate translate -targetplatform ${TARGETPLATFORM} -field a
     " -o app cmd/ddns-updater/main.go
 
 FROM scratch
-EXPOSE 8000
+EXPOSE 12345
 HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=2 CMD ["/updater/ddns-updater", "healthcheck"]
 ARG UID=1000
 ARG GID=1000
@@ -90,7 +90,7 @@ ENV \
     RESOLVER_TIMEOUT=5s \
     # Web UI
     SERVER_ENABLED=yes \
-    LISTENING_ADDRESS=:8000 \
+    LISTENING_ADDRESS=:12345 \
     ROOT_URL=/ \
     # Backup
     BACKUP_PERIOD=0 \

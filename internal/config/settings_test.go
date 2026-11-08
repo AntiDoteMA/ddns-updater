@@ -19,7 +19,7 @@ func Test_Settings_String(t *testing.T) {
 ├── HTTP client
 |   └── Timeout: 20s
 ├── Update
-|   ├── Period: 5m0s
+|   ├── Period: 1m0s
 |   └── Cooldown: 5m0s
 ├── Public IP fetching
 |   ├── HTTP enabled: yes
@@ -35,7 +35,7 @@ func Test_Settings_String(t *testing.T) {
 |       └── all
 ├── Resolver: use Go default resolver
 ├── Server
-|   ├── Listening address: :8000
+|   ├── Listening address: :12345
 |   └── Root URL: /
 ├── Health
 |   └── Server is disabled
